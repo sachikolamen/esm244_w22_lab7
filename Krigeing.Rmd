@@ -1,0 +1,156 @@
+---
+title: 'Lab 7, Part 2: Kriging'
+author: "Sachiko Lamen"
+date: "2/17/2022"
+output: html_document
+---
+
+```{r setup, include= TRUE, messages = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE, messages = FALSE, warning = FALSE)
+library(tidyverse)
+library(here)
+library(sf)
+library(tmap)
+library(gstat)
+library(stars) # spatial temporal arrays -- will eventually take the place of the raster package
+```
+
+### Read in CA map and groundwater depth data
+
+```{r}
+### Read in counties
+ca_counties_sf <- read_sf(here("data", "ca_counties", "CA_Counties_TIGER2016.shp")) %>%
+  janitor::clean_names() %>%
+  select(name)
+
+### Check the projection
+st_crs(ca_counties_sf)
+
+### Read in groundwater depth data
+ca_dgw_sf <- read_sf(here("data", "ca_dgw", "F2013_DBGS_Points_20150720_093252.gpkg")) %>%
+  janitor::clean_names()
+
+### Check the projection
+st_crs(ca_dgw_sf)
+
+# uh oh, they have different coordinate systems so we need to transform them to match:
+
+ca_dgw_sf <- st_transform(ca_dgw_sf, st_crs(ca_counties_sf))
+
+ggplot() +
+  geom_sf(data = ca_counties_sf) +
+  geom_sf(data = ca_dgw_sf, aes(color = dgbs))
+```
+
+```{r}
+### lets do an interactive tmap
+tmap_mode(mode = 'view')
+
+tm_shape(ca_dgw_sf) +
+  tm_dots('dgbs', palette = 'Blues')
+
+## tmaptools::palette_explorer()  ### need shinyjs package!
+```
+
+From these graphs we see that there is indeed some sort of spatial pattern or correlation with groundwater depth.
+
+### CLip to San Joaquin County
+```{r}
+sj_county_sf <- ca_counties_sf %>%
+  filter(name == "San Joaquin")
+
+### Now keep observations for groundwater depth in that county:
+# take two spatial data sets and overlap them and take just the intersection
+
+sj_depth_sf <- ca_dgw_sf %>%
+  st_intersection(sj_county_sf)
+
+ggplot()+
+  geom_sf(data = sj_county_sf) +
+  geom_sf(data = sj_depth_sf, aes(color = dgbs)) +
+  theme_void() +
+  scale_color_viridis_c()
+```
+
+Take points to create variogram and interpolate (guess) what ground water depth would be at other locations
+
+
+ ### Check for duplicate locations
+ - make sure to eliminate duplicates or variogram wont work!
+ 
+```{r}
+well_duplicates <- sj_depth_sf %>%
+  janitor::get_dupes(latitude, longitude) # if lat and long are simultaneously duplicated it will let us know!
+
+### Drop duplicated data
+sj_depth_sf <- sj_depth_sf %>%
+  filter(!local_well %in% well_duplicates$local_well)
+
+```
+
+### Create a variogram!
+```{r}
+## ORDINARY Kreging
+sj_dgw_vgm <- gstat::variogram(dgbs ~ 1, data = sj_depth_sf)
+
+plot(sj_dgw_vgm)
+```
+```{r}
+### Create a variogram model by fitting a variogram to the points (above)
+sj_dgw_vgm_fit <- fit.variogram(sj_dgw_vgm, 
+                                model = vgm(model = 'Gau', # Gau = gaussian
+                                            nugget = 20,
+                                            sill = 3000,
+                                            range = 32000))
+
+plot(sj_dgw_vgm, sj_dgw_vgm_fit)
+
+attr(sj_dgw_vgm_fit, 'SSErr') # to check the sum of squares value to determine fit we can see that the values we manually put in are better fit than the model generated values
+
+### Based on variogram fit pass those measurements into the krigen thing 
+```
+
+### Spatial Kriging
+
+```{r}
+sj_grid <- st_bbox(sj_county_sf) %>%
+  st_as_stars(dx = 1000, dy = 1000) %>%
+  st_set_crs(st_crs(sj_county_sf)) %>%
+  st_crop(sj_county_sf)
+
+sj_grid
+
+plot(sj_grid)
+
+### perform ordinary kriging -- give it a formula (simple, ordinary, etc), and give it location (points)
+sj_dgw_krige <- krige(dgbs ~ 1, sj_depth_sf, sj_grid, 
+                      model = sj_dgw_vgm_fit)
+
+plot(sj_dgw_krige)
+
+krige_df <- as.data.frame(sj_dgw_krige) %>%
+  st_as_sf(coords = c('x', 'y')) %>%
+  drop_na(var1.pred)
+
+ggplot(data = krige_df) +
+  geom_sf(aes(color = var1.pred)) +
+  scale_color_gradient(low = 'blue', high = 'yellow')
+```
+
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 

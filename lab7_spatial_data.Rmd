@@ -1,0 +1,143 @@
+---
+title: 'Lab 7: Spatial Data'
+author: "Sachiko Lamen"
+date: "2/17/2022"
+output: html_document
+---
+
+```{r setup, include= TRUE, message = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(here)
+library(broom)
+library(sf) # vector, spatial data 
+library(tmap) # create cool thematic maps easily
+library(janitor)
+```
+
+## Part 1: Spatial data wrangling, visualization
+
+#### A. California County outlines (polygons)
+```{r}
+ca_counties_sf <- read_sf(here("data", "ca_counties", "cA_Counties_TIGER2016.shp")) 
+
+ca_subset_sf <- ca_counties_sf %>%
+  clean_names() %>%
+  select(county_name = name, land_area = aland)
+
+# If for some reason you want to remove the `sticky` geometry column, can force it into a non simple features dataframe by:
+ca_counties_df <- ca_counties_sf %>%
+  as.data.frame() %>%
+  select(-geometry)
+```
+
+#### Examine and set CRS (coordinate reference system)
+
+```{r}
+# take sf object and get coordinate reference system information, both do the same thing. First is more widely used
+ca_subset_sf %>% st_crs()
+
+ca_subset_sf %>% raster::crs()
+
+```
+
+```{r}
+ggplot(data = ca_subset_sf) +
+  geom_sf(aes(fill = land_area), color = 'white', size = 0.1) + 
+  theme_void() +
+  scale_fill_gradientn(colors = c('cyan', 'blue', 'purple'))
+```
+
+### B. Invasive Red Sesbania Records (spatial points)
+
+```{r}
+sesbania_sf <- read_sf(here("data", "red_sesbania", "ds80.shp")) %>%
+  clean_names()
+
+# Check CRS
+sesbania_sf %>% st_crs()
+
+# uh oh, we see that the CRS says "custom", need to make sure our CRS will match the counties data
+
+# If you know the EPSG then:
+sesbania_3857_sf <- st_transform(sesbania_sf, 3857)
+
+# if you dont know the ESPG then:
+sesbania_3857_2_sf <- st_transform(sesbania_sf, st_crs(ca_subset_sf))
+
+# check the new one
+sesbania_3857_sf %>% st_crs()
+
+sesbania_3857_2_sf %>% st_crs()
+```
+
+### Plot them together!
+
+```{r}
+ggplot() +
+  geom_sf(data = ca_subset_sf) +
+  geom_sf(data = sesbania_3857_sf, size = 1, color = 'red')
+```
+
+
+### Wrangle to find sesbania observations per county
+
+```{r}
+ca_sesb_sf <- ca_subset_sf %>%
+  st_join(sesbania_3857_sf)
+
+sesb_counts_sf <- ca_sesb_sf %>%
+  group_by(county_name) %>%
+  summarize(n_records = sum(!is.na(id))) # count all counties that do not have NA values using the ID column
+```
+
+```{r}
+ggplot(data = sesb_counts_sf) +
+  geom_sf(aes(fill = n_records), color = 'white', sioze = 0.1) +
+  scale_fill_gradientn(colors = c('lightgrey', 'orange', 'red')) +
+  theme_minimal() +
+  labs(fill = "Number of S. punicea reords")
+```
+
+
+### Filter to just occurences in Solano County
+
+```{r}
+### Subset based on Solano County
+solano_sesb_sf <- sesbania_3857_sf %>%
+  filter (county == "Solano")
+
+### Subset counties to only keep solano county polygon
+solano_sf <- ca_subset_sf %>%
+  filter(county_name == "Solano")
+
+ggplot() + 
+  geom_sf(data = solano_sf) +
+  geom_sf(data = solano_sesb_sf, color = "red")
+```
+
+#### Use `tmap` to make a cool interactive and pretty map
+
+```{r}
+# first we will make a static map
+tmap_mode(mode = 'view')
+tm_shape(ca_subset_sf) + 
+  tm_fill('land_area', palette = 'BuGn') +
+  tm_borders(col = 'black') +
+  tm_shape(sesbania_3857_sf) + 
+  tm_dots()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
